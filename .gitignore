@@ -1,0 +1,49 @@
+# ─── Node / npm / Yarn / pnpm ────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+.pnpm-store/
+
+# ─── Runtime logs ───────────────────────────────────────────────────────
+*.log
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# ─── Build / coverage / output ──────────────────────────────────────────
+dist/
+build/
+coverage/
+.nyc_output/
+.next/
+out/
+
+# ─── Environment secrets ────────────────────────────────────────────────
+.env
+.env.*              # e.g. .env.local, .env.ci
+!.env.example       # keep a template in version control
+
+# ─── Railway CLI linkage ────────────────────────────────────────────────
+.railway/           # contains project IDs & metadata (regenerate any time)
+
+# ─── Editor / OS cruft ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+
+# ─── Mac archive attributes ─────────────────────────────────────────────
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# ─── Optional: system-wide crash dumps ──────────────────────────────────
+*.dmp
