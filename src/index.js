@@ -82,6 +82,10 @@ async function sendForCampaign (db, es, c) {
 
   for (const row of batch) {
     try {
+      console.log('Sending:');
+      console.log(row.email);
+      console.log(row.html);
+      /*
       await tx.sendMail({
         from: smtp.from,
         to: row.email,
@@ -89,6 +93,7 @@ async function sendForCampaign (db, es, c) {
         html: row.html,
         text: row.text || undefined
       });
+      */
 
       await db.query(`UPDATE campaign_contacts SET sent_at = now() WHERE id=$1`, [row.id]);
 
