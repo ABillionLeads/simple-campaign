@@ -6,13 +6,11 @@ const { Pool }            = require('pg');
 const nodemailer          = require('nodemailer');
 
 const {
-  DATABASE_URL,
-  ES_NODE
+  DATABASE_URL
 } = process.env;
 
 const missing = [];
 if (!DATABASE_URL) missing.push('DATABASE_URL');
-if (!ES_NODE)      missing.push('ES_NODE');
 if (missing.length) {
   console.error('Missing env vars:', missing.join(', '));
   process.exit(1);

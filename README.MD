@@ -1,4 +1,4 @@
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/ABillionLeads/simple-campaign&envs=DATABASE_URL)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/pQKn8C?referralCode=B_X-YI)
 
 
 One-stop-shop to setup the domains, the smtp servers and start sending in 7 lines of code.
