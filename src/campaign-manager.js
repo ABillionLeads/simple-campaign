@@ -184,62 +184,6 @@ async function insertCampaignContacts(campaignId, contacts) {
   }
 }
 
-/**
- * Example utility: create a sample campaign with 10 contacts
- */
-async function createSampleCampaign() {
-  try {
-    const campaign = await createCampaign({
-      name: 'Welcome Campaign',
-      api_key: 'sample-api-key',
-      es_query: {
-        query: { match: { status: 'active' } }
-      },
-      smtp: {
-        host: 'smtp.gmail.com',
-        port: 587,
-        secure: false,
-        auth: {
-          user: 'your-email@gmail.com',
-          pass: 'your-app-password'
-        },
-        from: 'your-email@gmail.com'
-      },
-      per_hour_limit: 100,
-      max_send_limit: 1000          // new cap
-    });
-
-    const sampleContacts = Array.from({ length: 10 }, (_, i) => ({
-      email:   `user${i + 1}@example.com`,
-      subject: `Welcome to our platform, User ${i + 1}!`,
-      html: `
-        <html>
-          <body>
-            <h1>Welcome User ${i + 1}!</h1>
-            <p>Thank you for joining our platform. We're excited to have you on board!</p>
-            <p>Best regards,<br>The Team</p>
-          </body>
-        </html>
-      `,
-      text: `Welcome User ${i + 1}! Thank you for joining our platform.`,
-      es_index:  'users',
-      es_doc_id: `user-${i + 1}`
-    }));
-
-    const contacts = await insertCampaignContacts(campaign.id, sampleContacts);
-
-    console.log('\n=== Sample Campaign Created ===');
-    console.log(`Campaign:      ${campaign.name}`);
-    console.log(`Campaign ID:   ${campaign.id}`);
-    console.log(`Contacts made: ${contacts.length}`);
-
-    return { campaign, contacts };
-  } catch (err) {
-    console.error('Error creating sample campaign:', err);
-    throw err;
-  }
-}
-
 // Exported API
 module.exports = {
   createCampaign,

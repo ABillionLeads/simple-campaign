@@ -40,8 +40,8 @@ async function main () {
        WHERE per_hour_limit > 0
     `);
 
-    for (const c of campaigns) {
-      await sendForCampaign(client, es, c);
+    for (const campaign of campaigns) {
+      await sendForCampaign(client, campaign);
     }
     
   } finally {
@@ -51,18 +51,23 @@ async function main () {
   }
 }
 
-/* -------------------------------------------------------------------------- */
+// we need to notify the server we're going to contact these ids
+// never pull more contacts than we need to in the following hour
+// we will mark them as contacted optimistically 
+async function insertCampaignContacts(ablApiKey, campaignId, query) {
+  
+}
 
-async function sendForCampaign (db, es, c) {
+async function sendForCampaign (db, campaign) {
   const { rows: [{ n: sentLastHour }] } = await db.query(
     `SELECT COUNT(*)::int AS n
        FROM campaign_contacts
       WHERE campaign_id=$1
         AND sent_at >= now() - INTERVAL '1 hour'`,
-    [c.id]
+    [campaign.id]
   );
 
-  const quota = c.per_hour_limit - sentLastHour;
+  const quota = campaign.per_hour_limit - sentLastHour;
   if (quota <= 0) { log(`[${c.name}] quota reached`); return; }
 
   const { rows: batch } = await db.query(
@@ -71,14 +76,14 @@ async function sendForCampaign (db, es, c) {
       WHERE campaign_id=$1 AND sent_at IS NULL
       ORDER BY id
       FOR UPDATE SKIP LOCKED
-      LIMIT $2`, [c.id, quota]
+      LIMIT $2`, [campaign.id, quota]
   );
-  if (!batch.length) { log(`[${c.name}] nothing pending`); return; }
+  if (!batch.length) { log(`[${campaign.name}] nothing pending`); return; }
 
-  const smtp = JSON.parse(c.smtp);
+  const smtp = JSON.parse(campaign.smtp);
   const tx   = nodemailer.createTransport(smtp);
 
-  log(`[${c.name}] sending ${batch.length} email(s)…`);
+  log(`[${campaign.name}] sending ${batch.length} email(s)…`);
 
   for (const row of batch) {
     try {
@@ -98,15 +103,7 @@ async function sendForCampaign (db, es, c) {
       await db.query(`UPDATE campaign_contacts SET sent_at = now() WHERE id=$1`, [row.id]);
 
       if (row.es_index && row.es_doc_id) {
-        const tag = `${c.api_key}:${c.id}`;
-        es.update({
-          index:  row.es_index,
-          id:     row.es_doc_id,
-          script: {
-            source: 'if (!ctx._source.contactedBy.contains(params.tag)) ctx._source.contactedBy.add(params.tag)',
-            params: { tag }
-          }
-        }).catch(e => log(`ES update failed for ${row.email}:`, e.meta?.body?.error || e));
+        const tag = `${campaign.api_key}:${campaign.id}`;
       }
 
       log(`✓ ${row.email}`);
