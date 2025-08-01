@@ -1,11 +1,8 @@
 // campaign-manager.js — Campaign and contact management utilities
 require('dotenv').config();
-
 const { Pool } = require('pg');
 
-const {
-  DATABASE_URL
-} = process.env;
+const { DATABASE_URL } = process.env;
 
 const missing = [];
 if (!DATABASE_URL) missing.push('DATABASE_URL');
@@ -16,18 +13,19 @@ if (missing.length) {
 
 /**
  * Create a new campaign
- * @param {Object} campaignData - Campaign configuration
- * @param {string} campaignData.name - Campaign name
- * @param {string} campaignData.api_key - API key for ES integration
- * @param {Object} campaignData.es_query - Elasticsearch query object
- * @param {boolean} campaignData.use_net_new - Whether to use net new contacts
- * @param {Array} campaignData.exclude_campaign_ids - Array of campaign IDs to exclude
- * @param {Object} campaignData.smtp - SMTP configuration object
- * @param {number} campaignData.per_hour_limit - Hourly sending limit
- * @returns {Promise<Object>} Created campaign object
+ * @param {Object}  campaignData
+ * @param {string}  campaignData.name              - Campaign name
+ * @param {string}  campaignData.api_key           - API key for ES integration
+ * @param {Object}  campaignData.es_query          - Elasticsearch query object
+ * @param {boolean} [campaignData.use_net_new=true]- Whether to use net-new contacts
+ * @param {Array}   [campaignData.exclude_campaign_ids=[]] - Campaign IDs to exclude
+ * @param {Object}  campaignData.smtp              - SMTP configuration object
+ * @param {number}  campaignData.per_hour_limit    - Hourly send limit
+ * @param {?number} [campaignData.max_send_limit]  - Global cap (NULL/omit ⇒ unlimited)
+ * @returns {Promise<Object>}                      - Created campaign row
  */
 async function createCampaign(campaignData) {
-  const pool = new Pool({ connectionString: DATABASE_URL });
+  const pool   = new Pool({ connectionString: DATABASE_URL });
   const client = await pool.connect();
 
   try {
@@ -38,30 +36,40 @@ async function createCampaign(campaignData) {
       use_net_new = true,
       exclude_campaign_ids = [],
       smtp,
-      per_hour_limit
+      per_hour_limit,
+      max_send_limit = null
     } = campaignData;
 
-    // Validate required fields
+    // Required-field validation
     if (!name || !api_key || !es_query || !smtp || !per_hour_limit) {
-      throw new Error('Missing required fields: name, api_key, es_query, smtp, per_hour_limit');
+      throw new Error(
+        'Missing required fields: name, api_key, es_query, smtp, per_hour_limit'
+      );
     }
 
-    const { rows } = await client.query(`
-      INSERT INTO campaigns (
-        name, api_key, es_query, use_net_new, exclude_campaign_ids, smtp, per_hour_limit
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING id, name, api_key, created_at
-    `, [
-      name,
-      api_key,
-      JSON.stringify(es_query),
-      use_net_new,
-      exclude_campaign_ids,
-      JSON.stringify(smtp),
-      per_hour_limit
-    ]);
+    const { rows } = await client.query(
+      `
+        INSERT INTO campaigns (
+          name, api_key, es_query, use_net_new, exclude_campaign_ids,
+          smtp, per_hour_limit, max_send_limit
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        RETURNING id, name, api_key, per_hour_limit, max_send_limit, created_at
+      `,
+      [
+        name,
+        api_key,
+        JSON.stringify(es_query),
+        use_net_new,
+        exclude_campaign_ids,
+        JSON.stringify(smtp),
+        per_hour_limit,
+        max_send_limit
+      ]
+    );
 
-    console.log(`✓ Campaign created: ${rows[0].name} (ID: ${rows[0].id})`);
+    console.log(
+      `✓ Campaign created: ${rows[0].name} (ID: ${rows[0].id})`
+    );
     return rows[0];
   } finally {
     client.release();
@@ -70,24 +78,47 @@ async function createCampaign(campaignData) {
 }
 
 /**
- * Insert campaign contacts
- * @param {string} campaignId - Campaign UUID
- * @param {Array} contacts - Array of contact objects
- * @returns {Promise<Array>} Array of created contact objects
+ * Insert contacts into a campaign queue
+ * @param {string} campaignId            - Campaign UUID
+ * @param {Array}  contacts              - Contact objects
+ * @returns {Promise<Array>}             - Created contact rows
  */
 async function insertCampaignContacts(campaignId, contacts) {
-  const pool = new Pool({ connectionString: DATABASE_URL });
+  const pool   = new Pool({ connectionString: DATABASE_URL });
   const client = await pool.connect();
 
   try {
-    // Validate campaign exists
-    const { rows: campaignCheck } = await client.query(
-      'SELECT id FROM campaigns WHERE id = $1',
+    // Fetch campaign configuration & limits
+    const { rows: [campaign] } = await client.query(
+      `
+        SELECT id, max_send_limit
+        FROM campaigns
+        WHERE id = $1
+      `,
       [campaignId]
     );
 
-    if (campaignCheck.length === 0) {
+    if (!campaign) {
       throw new Error(`Campaign with ID ${campaignId} not found`);
+    }
+
+    // Optional guard: stop inserting if cap already reached
+    if (campaign.max_send_limit !== null) {
+      const { rows: [{ n: alreadyQueued }] } = await client.query(
+        `
+          SELECT COUNT(*)::int AS n
+          FROM campaign_contacts
+          WHERE campaign_id = $1
+        `,
+        [campaignId]
+      );
+
+      if (alreadyQueued >= campaign.max_send_limit) {
+        console.log(
+          `Campaign ${campaignId} already has ${alreadyQueued}/${campaign.max_send_limit} contacts – skipping insert.`
+        );
+        return [];
+      }
     }
 
     const createdContacts = [];
@@ -98,35 +129,54 @@ async function insertCampaignContacts(campaignId, contacts) {
         subject,
         html,
         text,
-        es_index = null,
+        es_index  = null,
         es_doc_id = null
       } = contact;
 
-      // Validate required fields
+      // Validate per-contact required fields
       if (!email || !subject || !html) {
-        console.warn(`Skipping contact with missing required fields: ${email || 'unknown'}`);
+        console.warn(
+          `Skipping contact with missing required fields: ${email || 'unknown'}`
+        );
         continue;
       }
 
-      const { rows } = await client.query(`
-        INSERT INTO campaign_contacts (
-          campaign_id, email, subject, html, text, es_index, es_doc_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, email, subject, created_at
-      `, [
-        campaignId,
-        email,
-        subject,
-        html,
-        text || null,
-        es_index,
-        es_doc_id
-      ]);
+      const { rows } = await client.query(
+        `
+          INSERT INTO campaign_contacts (
+            campaign_id, email, subject, html, text,
+            es_index, es_doc_id
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+          RETURNING id, email, subject, created_at
+        `,
+        [
+          campaignId,
+          email,
+          subject,
+          html,
+          text || null,
+          es_index,
+          es_doc_id
+        ]
+      );
 
       createdContacts.push(rows[0]);
+
+      // Break early if we hit the cap while inserting
+      if (
+        campaign.max_send_limit !== null &&
+        createdContacts.length + (alreadyQueued || 0) >= campaign.max_send_limit
+      ) {
+        console.log(
+          `Reached campaign max_send_limit (${campaign.max_send_limit}) while inserting; remaining contacts skipped.`
+        );
+        break;
+      }
     }
 
-    console.log(`✓ Inserted ${createdContacts.length} contacts for campaign ${campaignId}`);
+    console.log(
+      `✓ Inserted ${createdContacts.length} contacts for campaign ${campaignId}`
+    );
     return createdContacts;
   } finally {
     client.release();
@@ -135,23 +185,16 @@ async function insertCampaignContacts(campaignId, contacts) {
 }
 
 /**
- * Example usage function - creates a sample campaign with 10 contacts
+ * Example utility: create a sample campaign with 10 contacts
  */
 async function createSampleCampaign() {
   try {
-    // Create a sample campaign
     const campaign = await createCampaign({
       name: 'Welcome Campaign',
       api_key: 'sample-api-key',
       es_query: {
-        query: {
-          match: {
-            status: 'active'
-          }
-        }
+        query: { match: { status: 'active' } }
       },
-      use_net_new: true,
-      exclude_campaign_ids: [],
       smtp: {
         host: 'smtp.gmail.com',
         port: 587,
@@ -162,12 +205,12 @@ async function createSampleCampaign() {
         },
         from: 'your-email@gmail.com'
       },
-      per_hour_limit: 100
+      per_hour_limit: 100,
+      max_send_limit: 1000          // new cap
     });
 
-    // Create 10 sample contacts
     const sampleContacts = Array.from({ length: 10 }, (_, i) => ({
-      email: `user${i + 1}@example.com`,
+      email:   `user${i + 1}@example.com`,
       subject: `Welcome to our platform, User ${i + 1}!`,
       html: `
         <html>
@@ -179,25 +222,25 @@ async function createSampleCampaign() {
         </html>
       `,
       text: `Welcome User ${i + 1}! Thank you for joining our platform.`,
-      es_index: 'users',
+      es_index:  'users',
       es_doc_id: `user-${i + 1}`
     }));
 
     const contacts = await insertCampaignContacts(campaign.id, sampleContacts);
 
     console.log('\n=== Sample Campaign Created ===');
-    console.log(`Campaign: ${campaign.name}`);
-    console.log(`Campaign ID: ${campaign.id}`);
-    console.log(`Contacts created: ${contacts.length}`);
-    
+    console.log(`Campaign:      ${campaign.name}`);
+    console.log(`Campaign ID:   ${campaign.id}`);
+    console.log(`Contacts made: ${contacts.length}`);
+
     return { campaign, contacts };
-  } catch (error) {
-    console.error('Error creating sample campaign:', error);
-    throw error;
+  } catch (err) {
+    console.error('Error creating sample campaign:', err);
+    throw err;
   }
 }
 
-// Export functions for use in other modules
+// Exported API
 module.exports = {
   createCampaign,
   insertCampaignContacts,

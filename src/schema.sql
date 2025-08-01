@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   -- SMTP + rate-limit
   smtp                 jsonb NOT NULL,
   per_hour_limit       int  NOT NULL,
-
+  max_send_limit       int,
   created_at           timestamptz NOT NULL DEFAULT now()
 );
 
@@ -36,9 +36,6 @@ CREATE TABLE IF NOT EXISTS campaign_contacts (
   subject     text NOT NULL,
   html        text NOT NULL,
   text        text,
-
-  es_index    text,
-  es_doc_id   text,
 
   sent_at     timestamptz,
 
