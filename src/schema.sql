@@ -10,15 +10,17 @@ CREATE TABLE IF NOT EXISTS campaigns (
 
   -- ES / filtering knobs
   api_key              text NOT NULL,
-  es_query             jsonb NOT NULL,
+  query                jsonb NOT NULL,
   use_net_new          boolean NOT NULL DEFAULT true,
   exclude_campaign_ids uuid[] NOT NULL DEFAULT '{}',
 
   -- SMTP + rate-limit
   smtp                 jsonb NOT NULL,
   per_hour_limit       int  NOT NULL,
-  max_send_limit       int,
-  created_at           timestamptz NOT NULL DEFAULT now()
+
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  -- campaign size
+  audience_size int NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS campaigns_api_key_idx
@@ -34,8 +36,7 @@ CREATE TABLE IF NOT EXISTS campaign_contacts (
   email       text NOT NULL,
 
   subject     text NOT NULL,
-  html        text NOT NULL,
-  text        text,
+  body        text NOT NULL,
 
   sent_at     timestamptz,
 

@@ -3,6 +3,8 @@ require('dotenv').config();
 
 const { createCampaign, insertCampaignContacts } = require('./src/campaign-manager');
 
+const query = {"included":{"industry":["marketing and advertising"],"job_company_size":["1-10","51-200","11-50","201-500"]},"excluded":{}};
+
 async function runSample() {
   try {
     console.log('🚀 Creating sample campaign...\n');

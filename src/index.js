@@ -1,12 +1,26 @@
 // index.js — Railway Cron: 0 * * * *   (boot → send → exit)
 require('dotenv').config();
 
+/*
+users will use their api key to start campaigns on my server. 
+ABL will store on each contact contacted by them:
+1. their api key(to mark that contact as globally contacted by them) and
+2. a campaign id(so they can either contact net new contacts or just contacts that are new for that specific campaign)
+
+*/
 const initDb              = require('./init-db');
 const { Pool }            = require('pg');
 const nodemailer          = require('nodemailer');
+const { getSentContactCount, insertCampaignContacts, createCampaign } = require('./campaign-manager');
+const { fetchABLContacts } = require('./abl-contact-fetcher');
+// Import fetch for making HTTP requests
+const fetch = require('node-fetch');
 
 const {
-  DATABASE_URL
+  DATABASE_URL,
+  // this should not be  here, i am the only one that needs it
+  ABL_API_ENDPOINT,
+  ABL_API_KEY
 } = process.env;
 
 const missing = [];
@@ -26,7 +40,7 @@ if (missing.length) {
 })().catch(e => { console.error(e); process.exit(1); });
 
 /* -------------------------------------------------------------------------- */
-
+// i think i need to pass in the personalization function here
 async function main () {
   log('Worker started');
 
@@ -35,12 +49,15 @@ async function main () {
   const client = await pool.connect();
   try {
     const { rows: campaigns } = await client.query(`
-      SELECT id, name, api_key, smtp::text, per_hour_limit
+      SELECT id, name, api_key, query, smtp::text, per_hour_limit, audience_size
         FROM campaigns
        WHERE per_hour_limit > 0
     `);
 
+
+   
     for (const campaign of campaigns) {
+      await generateAndInsertContactsForCampaign(campaign, ABL_API_KEY);
       await sendForCampaign(client, campaign);
     }
     
@@ -51,11 +68,65 @@ async function main () {
   }
 }
 
-// we need to notify the server we're going to contact these ids
-// never pull more contacts than we need to in the following hour
-// we will mark them as contacted optimistically 
-async function insertCampaignContacts(ablApiKey, campaignId, query) {
+async function createSampleCampaign() {
+  const queryParam = {
+    included: {
+      industry: ['marketing and advertising'],
+      job_company_size: ['1-10', '51-200', '11-50', '201-500'],
+    },
+    excluded: {},
+  };
+  let campaignCreationObject = {
+    name: 'test',
+    api_key: ABL_API_KEY,
+    query: queryParam,
+    smtp: {
+      host: 'smtp.gmail.com',
+      port: 587,
+      secure: false,
+      auth: {
+        user: 'test',
+        pass: 'test'
+      }
+    },
+    per_hour_limit: 10,
+    audience_size: 100
+  }
+  await createCampaign(campaignCreationObject);
+}
+
+// the schema should not allow for duplicate emails in the same campaign
+// but if this happens, then i have a problem with the elasticsearch contactedBy
+async function generateAndInsertContactsForCampaign(campaign, ABL_API_KEY) {
+  let contacts = await fetchABLContacts({
+    apiKey: ABL_API_KEY,
+    campaignId: campaign.id,
+    noOfContactsToGet: campaign.per_hour_limit,
+    queryObject: campaign.query,
+    endpointPath: '/api/campaign-contacts',
+    baseUrl: ABL_API_ENDPOINT
+  });
+  let contactsToInsert = await personalizeContacts(campaign, contacts);
+  await insertCampaignContacts(campaign.id, contactsToInsert);
+  return contacts;
+}
+
+// personalize contacts
+async function personalizeContacts(campaign,contacts) {
+  // TODO: implement
+  let contactsToInsert = contacts.map(contact => {
+    // TODO: implement
+    let c = {};
+    c.email = contact.emails[0];
+    c.subject = 'test subject';
+    c.body = 'test email body';
+    c.created_at = new Date();
+    c.sent_at = new Date();
+    c.campaign_id = campaign.id;
+    return c; // Return the transformed object, not the original contact
+  });
   
+  return contactsToInsert;
 }
 
 async function sendForCampaign (db, campaign) {
@@ -68,10 +139,10 @@ async function sendForCampaign (db, campaign) {
   );
 
   const quota = campaign.per_hour_limit - sentLastHour;
-  if (quota <= 0) { log(`[${c.name}] quota reached`); return; }
+  if (quota <= 0) { log(`[${campaign.name}] quota reached`); return; }
 
   const { rows: batch } = await db.query(
-    `SELECT id,email,subject,html,text,es_index,es_doc_id
+    `SELECT id,email,subject,body
        FROM campaign_contacts
       WHERE campaign_id=$1 AND sent_at IS NULL
       ORDER BY id
@@ -89,14 +160,14 @@ async function sendForCampaign (db, campaign) {
     try {
       console.log('Sending:');
       console.log(row.email);
-      console.log(row.html);
+      console.log(row.body);
       /*
       await tx.sendMail({
         from: smtp.from,
         to: row.email,
         subject: row.subject,
-        html: row.html,
-        text: row.text || undefined
+        html: row.body,
+        text: convertHtmlToText(row.body)
       });
       */
 
